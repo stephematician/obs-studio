@@ -151,8 +151,6 @@ static bool try_connect(void *data, const char *device)
 	uint32_t width = obs_output_get_width(vcam->output);
 	uint32_t height = obs_output_get_height(vcam->output);
 
-	vcam->frame_size = width * height * 2;
-
 	vcam->device = open(device, O_RDWR);
 
 	if (vcam->device < 0)
@@ -161,10 +159,27 @@ static bool try_connect(void *data, const char *device)
 	if (ioctl(vcam->device, VIDIOC_QUERYCAP, &capability) < 0)
 		goto fail_close_device;
 
-	format.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
-
-	if (ioctl(vcam->device, VIDIOC_G_FMT, &format) < 0)
+	if (!(capability.capabilities & V4L2_CAP_VIDEO_OUTPUT))
 		goto fail_close_device;
+
+	format.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
+	format.fmt.pix.width = width;
+	format.fmt.pix.height = height;
+	format.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
+
+	if (ioctl(vcam->device, VIDIOC_S_FMT, &format) < 0)
+		goto fail_close_device;
+
+	if (format.fmt.pix.pixelformat != V4L2_PIX_FMT_YUYV)
+		goto fail_close_device;
+
+	vcam->frame_size = format.fmt.pix.width * format.fmt.pix.height * 2;
+
+	struct video_scale_info vsi = {0};
+	vsi.format = VIDEO_FORMAT_YUY2;
+	vsi.width = format.fmt.pix.width;
+	vsi.height = format.fmt.pix.height;
+	obs_output_set_video_conversion(vcam->output, &vsi);
 
 	struct obs_video_info ovi;
 	obs_get_video_info(&ovi);
@@ -178,20 +193,6 @@ static bool try_connect(void *data, const char *device)
 
 	if (ioctl(vcam->device, VIDIOC_S_PARM, &parm) < 0)
 		goto fail_close_device;
-
-	format.fmt.pix.width = width;
-	format.fmt.pix.height = height;
-	format.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
-	format.fmt.pix.sizeimage = vcam->frame_size;
-
-	if (ioctl(vcam->device, VIDIOC_S_FMT, &format) < 0)
-		goto fail_close_device;
-
-	struct video_scale_info vsi = {0};
-	vsi.format = VIDEO_FORMAT_YUY2;
-	vsi.width = width;
-	vsi.height = height;
-	obs_output_set_video_conversion(vcam->output, &vsi);
 
 	if (use_vcam_restart_workaround()) {
 		memset(&parm, 0, sizeof(parm));
